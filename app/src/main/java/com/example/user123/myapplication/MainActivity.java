@@ -74,7 +74,7 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-//        wb.loadUrl("http://12345677.com.tw");
+        wb.loadUrl("http://12345677.com.tw");
 //        wb.loadUrl("http://eventstest.ntpc.gov.tw/app/garbage/truckmap.jsp?region=%E8%87%BA%E6%9D%B1%E7%B8%A3&locality=%E9%97%9C%E5%B1%B1%E9%8E%AE&mregion=%E8%87%BA%E6%9D%B1%E7%B8%A3&mlocality=%E9%97%9C%E5%B1%B1%E9%8E%AE");
 //        wb.loadUrl("https://www.google.com.tw/");
     }
