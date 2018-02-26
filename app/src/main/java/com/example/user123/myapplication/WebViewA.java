@@ -5,9 +5,11 @@ import android.content.DialogInterface;
 import android.graphics.Bitmap;
 import android.net.http.SslError;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
-import android.os.Bundle;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
@@ -21,18 +23,29 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.RelativeLayout;
 
-public class MainActivity extends AppCompatActivity {
+import com.squareup.okhttp.OkHttpClient;
+import com.squareup.okhttp.Request;
+import com.squareup.okhttp.Response;
+
+import java.io.IOException;
+import java.net.URL;
+
+/* WebView 遇到http error時的優化
+附註
+1.重要 : isForMainFrame 才是正確的error code (有的網頁正常顯示 但會回傳404)(例:市醫掛號)
+2.會先得到errorcode才跑finished
+3.started只會跑第一次, finished才能得到每一次動作的url(例返回 下一頁)
+ */
+
+public class WebViewA extends AppCompatActivity {
 
     private RelativeLayout mTopCoverView;
     WebView wb;
-    String tag = "WebViewMainActivity";
+    String tag = "WebViewA";
 
-    private boolean shouldInvisible = false;
     private boolean hasErrorCode = false;
-
-    private static final int DO_TASK1 = 0;
-
-    private String htmlCode = "";
+    private boolean isSuccess = false;
+    private boolean shouldInVisible = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,12 +58,6 @@ public class MainActivity extends AppCompatActivity {
         setWebViewSetting();
 
         wb.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-                super.onReceivedSslError(view, handler, error);
-                Log.d(tag, "onReceivedSslError : " + error.toString());
-            }
-
             //onReceivedError舊版本
             @Override
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
@@ -63,11 +70,11 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 } else {
                     hasErrorCode = true;
-                    checkErrorCode(1, errorCode, description);
+                    checkErrorCode(errorCode);
                 }
             }
 
-            //onReceivedError新版本,只在Android6.0以上調用(含6.0)
+            //onReceivedError新版本
             @TargetApi(Build.VERSION_CODES.M)
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
@@ -76,61 +83,48 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(tag, "onReceivedError2 :　" + error.getErrorCode());
                 Log.d(tag, "onReceivedError2 :　" + error.getDescription());
 
-                if (request.isForMainFrame()) { //是發出的request否為Webview
-                    wb.loadUrl("");
+                if (request.isForMainFrame()) {
                     hasErrorCode = true;
-                    checkErrorCode(2, error.getErrorCode(), error.getDescription().toString());
+                    checkErrorCode(error.getErrorCode());
+                } else {
+                    //TODO
                 }
             }
 
-            //只在Android6.0以上調用(含6.0)
             @TargetApi(Build.VERSION_CODES.M)
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
                 super.onReceivedHttpError(view, request, errorResponse);
 
-                Log.d(tag, "onReceivedHttpError");
-                Log.d(tag, "" + errorResponse.getStatusCode());
-
+                //重要 : isForMainFrame 才是正確的error code (有的網頁正常顯示 但會回傳404)
                 if (request.isForMainFrame()) {
                     hasErrorCode = true;
-                    needToInvisibleWebView(3, errorResponse.getStatusCode() + "");
+                    showAlert(errorResponse.getStatusCode() + " error");
                 }
             }
 
+            //started只會跑一次
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
-                Log.d(tag, "onPageStarted");
             }
 
+            //剛進入結束時, 返回頁面結束時都會跑
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
 
-                if(Build.VERSION.SDK_INT < Build.VERSION_CODES.M && !hasErrorCode) { //沒有 error code跑這段
-                    //利用javasript抓取網頁原始碼
-//                    view.loadUrl("javascript:window.local_obj.showSource('<head>'+" + "document.getElementsByTagName('html')[0].innerHTML+'</head>');");
-                    //向網址取的連線response 利用Okhttp完成
-                } else { //有error code跑這段
-                    if (!shouldInvisible) {
-                        Log.d(tag,"有erroc code 但不影響");
-                        mTopCoverView.setVisibility(View.GONE);
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M && !hasErrorCode) {
+                    catchHttpConnection(url);
+                } else {
+                    if (!shouldInVisible) {
+                        mTopCoverView.setVisibility(View.VISIBLE);
                     } else {
-                        Log.d(tag,"有erroc code 已經跳alert了 不放行");
+                        mTopCoverView.setVisibility(View.GONE);
                     }
                 }
             }
         });
-
-//        wb.setWebChromeClient(new WebChromeClient(){
-//            @Override
-//            public void onReceivedTitle(WebView view, String title) {
-//                if(!TextUtils.isEmpty(title)&&title.toLowerCase().contains("網頁發生錯誤")){
-//                    Log.d(tag, "網頁發生錯誤");
-//                }
-//            }
-//        });
 
         //停車繳費 測試cache miss
 //        String postData = "is_member=1" + "&uid=AAA3631" + "&status=rbvYaGVbVWw_L6jApKkDzF7xGQOpJTziSjr4rmUvNzo";
@@ -139,49 +133,40 @@ public class MainActivity extends AppCompatActivity {
 
         //測試404 with error page
         wb.loadUrl("https://www.mpayment.ntpc.gov.tw/NTCMPAYMWeb/Indeffx.action");
-        //測試404-2
+        //測試404-2 with error page
 //        wb.loadUrl("http://eventstest.ntpc.gov.tw/app/json/adddd.jsp?");
 
         //without error page
-//        wb.loadUrl("http://172.18.20.149:8080/NTCMPAYMWeb/jsp/MPAYM0001.action");
+//        wb.loadUrl("http://172.18.20.149:8080/NTCMPAYMWeb/jsp/MPAYM0001.action"); //停車繳費測試機
 //        wb.loadUrl("http://3252355.com.tw");
 
         //市醫掛號
 //        wb.loadUrl("http://eventstest.ntpc.gov.tw/app/hospital/myschedule.jsp?identifier=AAA3631");
     }
 
+    //設定webview需要用到的參數
     private void setWebViewSetting() {
-        wb.getSettings().setJavaScriptEnabled(true);
-        wb.addJavascriptInterface(new InJavaScriptLocalObj(), "local_obj");
-
         //停車繳費須加上這段 不然會出現原生的error page fix ERR_CACHE_MISS 在瀏覽器看也會
         wb.getSettings().setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);//LOAD_CACHE_ELSE_NETWORK-無論是否有網路，只要本地有緩存，都使用缓存。本地没有缓存時才從網路上獲取。
     }
 
     //判斷error code
-    private void checkErrorCode(int type, int errorCode, String description) {
-        if (errorCode == -1) { //net::ERR_CACHE_MISS
-            needToInvisibleWebView(type, errorCode + "\n" + description);
-        } else if (errorCode == -2) { //找不到網址 net::ERR_NAME_NOT_RESOLVED
-            needToInvisibleWebView(type, errorCode + "\n" + description);
-        } else if (errorCode == -6) { //net::ERR_CONNECTION_REFUSED
-            needToInvisibleWebView(type, errorCode + "\n" + description);
-        } else if (errorCode == -11) { //無法建立安全連線
-            needToInvisibleWebView(type, errorCode + "\n" + description);
+    private void checkErrorCode(int errorCode) {
+        //-1 net::ERR_CACHE_MISS
+        //-2 net::ERR_NAME_NOT_RESOLVED 找不到網址
+        //-6 net::ERR_CONNECTION_REFUSED
+        //-11 無法建立安全連線
+        if (errorCode == -1 || errorCode == -2 || errorCode == -6 || errorCode == -11) {
+            showAlert(errorCode + " error");
         } else {
-
+            //TODO
         }
     }
 
-    private void needToInvisibleWebView(int type, String description) {
-        Log.d(tag, type + ". 顯示錯誤提示不讓error page顯示");
-        shouldInvisible = true;
-        showAlert("系統維護中請稍後再試", description);
-    }
-
-    private void showAlert(String title, String msg) {
-        new AlertDialog.Builder(MainActivity.this)
-                .setTitle(title)
+    //頁面錯誤 提醒使用者離開頁面
+    private void showAlert(String msg) {
+        shouldInVisible = true;
+        new AlertDialog.Builder(WebViewA.this)
                 .setMessage(msg)//設定顯示的文字
                 .setPositiveButton("確定",new DialogInterface.OnClickListener(){
                     @Override
@@ -192,30 +177,64 @@ public class MainActivity extends AppCompatActivity {
                 .show();//呈現對話視窗
     }
 
-    //利用javascrip印出網頁html碼
-    public final class InJavaScriptLocalObj {
-        @JavascriptInterface
-        public void showSource(String html) {
-            htmlCode = html;
-            if ((htmlCode.contains("status_code:") && htmlCode.contains("404"))) {
-                shouldInvisible = true;
-                needToInvisibleWebView(4, "網頁錯誤"); //無error code , html解析後顯示提醒alert
-//                Log.d(tag, "===============HTML CODE===============" + htmlCode);
-            } else {
-                Log.d(tag, "無error code , html解析後放行");
-                shouldInvisible = false;
-                mTopCoverView.setVisibility(View.GONE);//TODO 要另外建執行序 execption: Only the original thread that created a view hierarchy can touch its views
+    //6.0 以下抓不到error code 需判斷 http response
+    private void catchHttpConnection(final String path) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    URL url = new URL(path);
+                    OkHttpClient client = new OkHttpClient();
+
+                    Request request = new Request.Builder()
+                            .url(url)
+                            .build();
+
+                    Response response = client.newCall(request).execute();
+                    isSuccess = response.isSuccessful();
+
+                    Log.d(tag, "catchHttpConnection : " +path + ", success : " + isSuccess);
+
+                    if (isSuccess) {
+                        Message msg = Message.obtain();
+                        msg.what = 1;
+                        handler.sendMessage(msg);
+                    } else {
+                        Message msg = Message.obtain();
+                        msg.what = 2;
+                        handler.sendMessage(msg);
+                    }
+                } catch (IOException e) { //解析網址錯誤時
+                    Log.d(tag, "e : " + e.toString());
+                    Message msg = Message.obtain();
+                    msg.what = 3;
+                    handler.sendMessage(msg);
+                }
             }
-        }
+        }).start();
     }
 
+    //判斷 http response 是否顯示頁面
+    Handler handler = new Handler(){
+        @Override
+        public void handleMessage(Message msg) {
+            if (msg.what == 1) {
+                mTopCoverView.setVisibility(View.GONE);
+            } else {
+                mTopCoverView.setVisibility(View.VISIBLE);
+                showAlert("error");
+            }
+        }
+    };
+
+    //返回按鈕
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_BACK:
                     if (wb.canGoBack()) {
-                        shouldInvisible = false;
+                        shouldInVisible = false;
                         wb.goBack();
                     } else {
                         finish();
@@ -224,5 +243,12 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         return super.onKeyDown(keyCode, event);
+    }
+
+    //destroy時清掉cache
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        wb.clearCache(true); // 清除暫存 cache !!
     }
 }
